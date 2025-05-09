@@ -1,0 +1,215 @@
+---
+title: "412 PROJECT"
+author: 'ELİF YAĞMUR MENTEŞ 2502201'
+date: "2025-05-08"
+output: html_document
+---
+
+1. Aim of the Project
+
+In order to anticipate whether a client would sign up for a term deposit (y), this project will investigate, preprocess, analyze, and model the Bank Marketing dataset.
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(skimr)
+library(DataExplorer)
+library(naniar)
+library(corrplot)
+library(glmnet)
+library(ggpubr)
+set.seed(412) # fixed seed for reproducibility
+```
+
+2. Source of the Data and Variables
+
+The dataset comes from a Portuguese bank’s marketing campaign. The dependent variable is:
+
+y: Did the client subscribe to a term deposit? (yes/no)
+
+```{r}
+data <- read.csv("bank-additional-full.csv", sep = ";")
+glimpse(data)
+
+```
+
+3. Data Cleaning and Tidying
+
+First, we will verify and fix data types, rename columns if needed, and summarize the fundamental structure.
+
+```{r}
+# Convert character variables to factors
+data <- data %>%
+  mutate(across(where(is.character), as.factor))
+
+# Check structure and summaries
+skim(data)
+
+```
+
+4. EDA with Missing Values
+
+```{r}
+vis_miss(data)
+ggplot(data, aes(x = y, y = age, fill = y)) + geom_boxplot() + theme_minimal()
+
+num_data <- select_if(data, is.numeric)
+num_data <- num_data[complete.cases(num_data), ]
+cor_matrix <- cor(num_data)
+corrplot::corrplot(cor_matrix, method = "number")
+
+```
+```{r}
+# Summary statistics
+summary(data)
+
+# Histograms for numeric variables
+plot_histogram(data)
+
+# Matrix scatter plot
+pairs(select(num_data, age, duration, campaign, pdays, previous), pch = 21)
+```
+
+5. Missing Data Mechanism and Imputation
+
+We now investigate the mechanism of missingness and, if necessary, use imputation. We will treat the several 999 values in the pdays variable as a distinct group.
+
+```{r}
+data$pdays <- ifelse(data$pdays == 999, NA, data$pdays)
+data$pdays[is.na(data$pdays)] <- median(data$pdays, na.rm = TRUE)
+
+```
+
+6. Feature Engineering
+
+New variables such as contacted_before, a binary indication of prior interaction, will be created.
+
+```{r}
+data <- data %>% mutate(contacted_before = ifelse(previous > 0, "yes", "no"),
+                        contacted_before = as.factor(contacted_before))
+
+```
+
+7. Confirmatory Data Analysis
+
+We will evaluate whether there is a substantial age difference between subscribers and non-subscribers.
+
+```{r}
+shapiro.test(sample(data$age, 5000))  # Shapiro for normality
+t.test(age ~ y, data = data)
+
+```
+8. Train-Test Split and Cross-Validation
+
+```{r}
+set.seed(412)
+train_index <- sample(seq_len(nrow(data)), size = 0.7 * nrow(data))
+train <- data[train_index, ]
+test <- data[-train_index, ]
+
+```
+
+9. Statistical Modeling (Logistic Regression)
+
+```{r}
+# Use logistic regression
+model <- glm(y ~ . -duration, data = train, family = "binomial")
+
+summary(model)
+```
+
+```{r}
+train <- train %>% select(-duration)  # drop duration
+
+# Fit initial model
+full_model <- glm(y ~ ., data = train, family = "binomial")
+
+# Extract the names of estimated (non-aliased) coefficients
+estimated_coefs <- names(coef(full_model))
+estimated_coefs <- estimated_coefs[estimated_coefs != "(Intercept)"]
+
+# Clean variable names to match dataset
+estimated_vars <- gsub("`", "", unique(gsub("^.*\\$", "", estimated_coefs)))
+estimated_vars <- intersect(names(train), estimated_vars)  # keep only real columns
+
+# Build safe formula
+if (length(estimated_vars) > 0) {
+  formula_text <- paste("y ~", paste(estimated_vars, collapse = " + "))
+  clean_model <- glm(as.formula(formula_text), data = train, family = "binomial")
+  
+  # VIF calculation
+  library(car)
+  print(vif(clean_model))
+  
+} else {
+  message("⚠️ No usable predictors remained. Check data preprocessing steps.")
+}
+
+# Residuals plot
+plot(model)
+
+```
+
+```{r, warning=FALSE}
+# Predict on test data
+prob <- predict(clean_model, newdata = test, type = "response")
+pred <- ifelse(prob > 0.5, "yes", "no") %>% as.factor()
+
+# Predict on train data (fix)
+train_prob <- predict(clean_model, newdata = train, type = "response")
+train_class <- ifelse(train_prob > 0.5, "yes", "no") %>% as.factor()
+
+# Confusion matrices
+table(Predicted = pred, Actual = test$y)
+table(Predicted = train_class, Actual = train$y)
+
+# Accuracy
+mean(pred == test$y)
+mean(train_class == train$y)
+
+# Evaluation function
+evaluate_model <- function(predictions, actuals) {
+  cm <- table(Predicted = predictions, Actual = actuals)
+  accuracy <- sum(diag(cm)) / sum(cm)
+  list(ConfusionMatrix = cm, Accuracy = accuracy)
+}
+
+evaluate_model(pred, test$y)
+evaluate_model(train_class, train$y)
+
+```
+The logistic regression model yielded reasonably good results with an accuracy of about 89.6% on the test data and 88.9% on the training data. The close alignment between the training and test accuracies indicates that the model is able to generalize effectively and isn't experiencing overfitting.
+
+However an analysis of the confusion matrix uncovers a notable class imbalance. The count of clients who opted for a term deposit (y = yes) is significantly lower than those who didn't (y = no). Although the model accurately predicted most instances of "no," it faced challenges with "yes" predictions, missing a considerable number of actual subscribers.
+
+This implies that even though the model demonstrates overall accuracy, it shows a bias towards the majority class which may not be suitable if the aim is to maximize the identification of potential subscribers. Future approaches could include the use of balanced sampling, cost sensitive learning or exploring different models such as decision trees or ensemble methods to enhance the prediction of the minority class.
+
+An early investigation, preprocessing, and modeling of the bank marketing dataset were reported in this interim report.  We constructed a logistic regression model and verified its performance and underlying assumptions.  Future research will examine other models (such as random forests or decision trees), enhance feature selection, and optimize performance through hyperparameter tweaking.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
